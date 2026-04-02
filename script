@@ -13,7 +13,7 @@ local MAX_RETRIES = 30
 local RETRY_DELAY = 0.5
 local SETTINGS_FILE = "uv_settings.json"
 local AUTO_STATE_FILE = "uv_autostate.json"
-local SCRIPT_URL = "https://raw.githubusercontent.com/EnesXVC/UniverseViewer/main/script"
+local SCRIPT_URL = "https://raw.githubusercontent.com/EnesXVC/UniverseViewer/refs/heads/main/script"
 
 local CFG = {
 	rgb = true,
@@ -495,16 +495,16 @@ local function buildOutput(collected, mode)
 	lines[#lines+1] = "--local " .. varN .. " = " .. prefix
 	lines[#lines+1] = ""
 	for i, entry in collected do
-		local kw = i == 1 and "if" or CFG.ifStyle
+		local kw = i == 1 and "if" or "elseif"
 		lines[#lines+1] = "--" .. entry.name
 		if #entry.ids > 1 then
 			local parts = {}
 			for _, id in entry.ids do
-				parts[#parts+1] = varN .. CFG.separator .. id
+				parts[#parts+1] = varN .. " == " .. id
 			end
-			lines[#lines+1] = kw .. " " .. table.concat(parts, CFG.multiSep) .. " then"
+			lines[#lines+1] = kw .. " " .. table.concat(parts, " or ") .. " then"
 		else
-			lines[#lines+1] = kw .. " " .. varN .. CFG.separator .. entry.ids[1] .. " then"
+			lines[#lines+1] = kw .. " " .. varN .. " == " .. entry.ids[1] .. " then"
 		end
 		lines[#lines+1] = ""
 	end
@@ -519,27 +519,49 @@ local function doStop(collected, mode, kicked)
 	RUNNING = false
 	if stopConn then stopConn:Disconnect() stopConn = nil end
 	pcall(function() delfile(AUTO_STATE_FILE) end)
-	StatusLbl.Text = "Stopped. " .. #collected .. " collected."
 	if #collected > 0 then
 		local out = buildOutput(collected, mode)
 		setclipboard(out)
+		StatusLbl.Text = "Done. " .. #collected .. " collected, copied!"
 		Notif("Done! " .. #collected .. " games copied.", 8, "UV Auto")
+	else
+		StatusLbl.Text = "Stopped. Nothing collected."
 	end
-	if kicked then LP:Kick("UV Automation stopped") end
+	if kicked then
+		task.wait(1)
+		LP:Kick("UV Automation stopped")
+	end
+end
+
+local function collectCurrent(s)
+	local id = s.mode == "gameid" and tostring(game.GameId) or tostring(game.PlaceId)
+	local prevIdx = s.currentIdx - 1
+	if prevIdx < 1 or prevIdx > #s.queue then return end
+	local name = s.queue[prevIdx].name
+	for _, c in s.collected do
+		if c.name == name then
+			c.ids[#c.ids+1] = id
+			return
+		end
+	end
+	s.collected[#s.collected+1] = {name=name, ids={id}}
 end
 
 local function runAutoFrom(state)
 	RUNNING = true
 	stopConn = UIS.InputBegan:Connect(function(inp2, gp)
 		if not gp and inp2.KeyCode == Enum.KeyCode.U and RUNNING then
+			collectCurrent(state)
 			doStop(state.collected, state.mode, true)
 		end
 	end)
 
 	task.spawn(function()
+		collectCurrent(state)
+
 		if state.currentIdx > #state.queue then
 			doStop(state.collected, state.mode, false)
-			task.wait(1)
+			task.wait(2)
 			TS:Teleport(state.startPlaceId, LP)
 			return
 		end
@@ -562,6 +584,7 @@ local function runAutoFrom(state)
 			end
 		end)
 
+		task.wait(0.5)
 		TS:Teleport(entry.placeId, LP)
 	end)
 end
@@ -592,37 +615,12 @@ end)
 
 StopBtn.MouseButton1Click:Connect(function()
 	if not RUNNING then return end
-	doStop({}, AUTO_MODE, false)
+	doStop(AUTO_RESUME and AUTO_RESUME.collected or {}, AUTO_MODE, false)
 end)
 
 if AUTO_RESUME then
 	task.delay(3, function()
-		local s = AUTO_RESUME
-		local prevIdx = s.currentIdx - 1
-		if prevIdx >= 1 and prevIdx <= #s.queue then
-			local collectedId = s.mode == "gameid" and tostring(game.GameId) or tostring(game.PlaceId)
-			local prevName = s.queue[prevIdx].name
-			local found = false
-			for _, c in s.collected do
-				if c.name == prevName then
-					c.ids[#c.ids+1] = collectedId
-					found = true
-					break
-				end
-			end
-			if not found then
-				s.collected[#s.collected+1] = {name=prevName, ids={collectedId}}
-			end
-			StatusLbl.Text = "Resumed [" .. prevIdx .. "/" .. #s.queue .. "] got: " .. collectedId
-			Notif("Collected: " .. collectedId, 4, "UV Auto")
-		end
-		if s.currentIdx > #s.queue then
-			doStop(s.collected, s.mode, false)
-			task.wait(1)
-			TS:Teleport(s.startPlaceId or game.PlaceId, LP)
-			return
-		end
-		runAutoFrom(s)
+		runAutoFrom(AUTO_RESUME)
 	end)
 end
 
